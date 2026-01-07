@@ -1,4 +1,3 @@
-# Recibimos todos los argumentos en $args para evitar problemas de parsing
 $inputCmd = $args[0]
 
 $version = "2.3 (Stable)"
@@ -6,7 +5,6 @@ $genesisRoot = Split-Path -Parent $PSScriptRoot
 $builderPath = Join-Path $genesisRoot "builder.bat"
 
 if ([string]::IsNullOrWhiteSpace($inputCmd)) {
-    # Si no escriben nada, mostramos ayuda
     $inputCmd = "help"
 }
 
@@ -25,7 +23,6 @@ elseif ($inputCmd -eq "compile") {
         Write-Host " [X] Error: No hay 'windowConfig.json' aqui." -ForegroundColor Red
         return
     }
-    # Ejecutamos el BAT y le pasamos el control
     & cmd.exe /c "$builderPath" "$currentDir"
 }
 else {

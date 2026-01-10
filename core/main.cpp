@@ -1,207 +1,99 @@
-#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <shellapi.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <string>
-#include <wrl.h>
 #include <fstream>
-#include <filesystem>
+#include <string>
+#include "json.hpp"
+#include "config.h"
+#include "nativeWindow/window.h"
+#include "nativeWindow/fileSystem.h"
+#include "nativeWindow/webView.h"
+#include "nativeWindow/APIs/Discord.h"
 
-// Includes del proyecto con las rutas relativas correctas desde core/
-#include "AppID.h"
-#include "nativeWindow/Utils.h" // <--- RUTA CORREGIDA
-#include "nativeWindow/Config.h"
-#include "nativeWindow/Discord.h"
-#include "nativeWindow/WebViewManager.h"
-#include "nativeWindow/LoadingScreen.h"
-#include "nativeWindow/LocalServer.h"
+using json = nlohmann::json;
 
-#pragma comment(lib, "shell32.lib")
-#pragma comment(lib, "ole32.lib")
-#pragma comment(lib, "user32.lib")
-#pragma comment(lib, "gdi32.lib")
-#pragma comment(lib, "shlwapi.lib")
-#pragma comment(lib, "comdlg32.lib")
-#pragma comment(lib, "psapi.lib")
-#pragma comment(lib, "ws2_32.lib")
+#ifndef GENESIS_APP_ID
+#define GENESIS_APP_ID "com.genesis.engine"
+#endif
 
-using namespace Microsoft::WRL;
-namespace fs = std::filesystem;
-
-AppConfig globalConfig;
-
-void LoadEmbeddedDiscordDLL()
+WindowConfig loadConfigFromAppData()
 {
-    std::wstring appDataPath = Utils::GetAppDataPath(GAME_APP_ID);
-    std::wstring dllPath = appDataPath + L"\\discord_game_sdk.dll";
+    WindowConfig cfg;
+    cfg.appID = GENESIS_APP_ID;
+    cfg.title = L"Genesis Engine";
+    cfg.backgroundColor = "#000000";
+    cfg.width = 1280;
+    cfg.height = 720;
+    cfg.minWidth = 800;
+    cfg.minHeight = 600;
+    cfg.resizable = true;
+    cfg.frame = true;
+    cfg.startMaximized = false;
+    cfg.fullscreen = false;
+    cfg.alwaysOnTop = false;
+    cfg.singleInstance = true;
+    cfg.build.entryPoint = "index.html";
 
-    if (GetFileAttributesW(dllPath.c_str()) == INVALID_FILE_ATTRIBUTES)
+    std::string configPath = FileSystem::getAppDataPath() + "\\assets\\windowConfig.json";
+    std::ifstream file(configPath);
+
+    if (file.is_open())
     {
-        HRSRC hRes = FindResourceW(NULL, L"DISCORD_DLL", RT_RCDATA);
-        if (hRes)
+        try
         {
-            HGLOBAL hData = LoadResource(NULL, hRes);
-            DWORD size = SizeofResource(NULL, hRes);
-            void *data = LockResource(hData);
+            json j;
+            file >> j;
 
-            if (data && size > 0)
+            std::string t = j.value("title", "Genesis Engine");
+            cfg.title = std::wstring(t.begin(), t.end());
+
+            cfg.author = j.value("author", "");
+            cfg.iconPath = j.value("icon", "");
+            cfg.backgroundColor = j.value("backgroundColor", "#000000");
+
+            cfg.width = j.value("width", 1280);
+            cfg.height = j.value("height", 720);
+            cfg.minWidth = j.value("minWidth", 800);
+            cfg.minHeight = j.value("minHeight", 600);
+
+            cfg.resizable = j.value("resizable", true);
+            cfg.fullscreen = j.value("fullscreen", false);
+            cfg.frame = j.value("frame", true);
+            cfg.alwaysOnTop = j.value("alwaysOnTop", false);
+            cfg.startMaximized = j.value("startMaximized", false);
+            cfg.singleInstance = j.value("singleInstance", true);
+
+            if (j.contains("build") && j["build"].contains("entryPoint"))
             {
-                fs::create_directories(appDataPath);
-                std::ofstream dllFile(dllPath, std::ios::binary);
-                dllFile.write((char *)data, size);
-                dllFile.close();
+                cfg.build.entryPoint = j["build"]["entryPoint"].get<std::string>();
             }
         }
+        catch (...)
+        {
+        }
+        file.close();
     }
-    // Carga tardía para satisfacer al linker
-    LoadLibraryW(dllPath.c_str());
+    return cfg;
 }
 
-LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmd, int show)
 {
-    static ComPtr<ICoreWebView2Controller> controller;
-    switch (message)
+    FileSystem::setDllDirectory();
+    WindowConfig config = loadConfigFromAppData();
+
+    DiscordRPC discord;
+    discord.init(123456789012345678);
+
+    WebViewInstance wv;
+    HWND hwnd = NativeWindow::Create(config, wv);
+
+    if (hwnd)
+        wv.Initialize(hwnd, config);
+
+    MSG msg = {};
+    while (GetMessage(&msg, NULL, 0, 0))
     {
-    case WM_CREATE:
-        SetTimer(hWnd, 1, 30, NULL);
-        break;
-    case WM_TIMER:
-        if (!WebViewManager::isLoaded)
-        {
-            LoadingScreen::rotationAngle = (LoadingScreen::rotationAngle + 15) % 360;
-            InvalidateRect(hWnd, NULL, FALSE);
-        }
-        else
-            KillTimer(hWnd, 1);
-        break;
-    case WM_PAINT:
-        if (!WebViewManager::isLoaded)
-        {
-            PAINTSTRUCT ps;
-            HDC hdc = BeginPaint(hWnd, &ps);
-            LoadingScreen::Draw(hWnd, hdc);
-            EndPaint(hWnd, &ps);
-        }
-        else
-            return DefWindowProc(hWnd, message, wParam, lParam);
-        break;
-    case WM_SIZE:
-        if (controller)
-        {
-            RECT b;
-            GetClientRect(hWnd, &b);
-            controller->put_Bounds(b);
-        }
-        break;
-    case WM_GETMINMAXINFO:
-    {
-        MINMAXINFO *m = (MINMAXINFO *)lParam;
-        m->ptMinTrackSize.x = globalConfig.minWidth;
-        m->ptMinTrackSize.y = globalConfig.minHeight;
-        return 0;
-    }
-    case WM_DESTROY:
-        DiscordManager::Get().Shutdown();
-        PostQuitMessage(0);
-        break;
-    case WM_USER + 1:
-        controller = (ICoreWebView2Controller *)lParam;
-        break;
-    case WM_NCHITTEST:
-    {
-        LRESULT hit = DefWindowProc(hWnd, message, wParam, lParam);
-        if (hit == HTCLIENT && globalConfig.frame == false)
-            return HTCAPTION;
-        return hit;
-    }
-    default:
-        return DefWindowProcW(hWnd, message, wParam, lParam);
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+        discord.run();
     }
     return 0;
-}
-
-int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nCmdShow)
-{
-    CoInitialize(NULL);
-    LoadEmbeddedDiscordDLL();
-
-    globalConfig = ConfigLoader::LoadFromAppData(GAME_APP_ID);
-
-    // Iniciar servidor local
-    std::wstring assetsPath = Utils::GetAppDataPath(GAME_APP_ID) + L"\\assets";
-    LocalServer::Start(3000, assetsPath);
-
-    CreateMutexW(NULL, TRUE, GAME_APP_ID);
-    if (GetLastError() == ERROR_ALREADY_EXISTS)
-        return 0;
-
-    if (!globalConfig.discordClientId.empty())
-    {
-        DiscordManager::Get().Initialize(Utils::ToString(globalConfig.discordClientId));
-    }
-
-    WNDCLASSEXW wc = {0};
-    wc.cbSize = sizeof(WNDCLASSEX);
-    wc.style = CS_HREDRAW | CS_VREDRAW;
-    wc.lpfnWndProc = WndProc;
-    wc.hInstance = hInst;
-    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-    wc.lpszClassName = L"GenesisClass";
-
-    std::wstring iconPath = Utils::GetAppDataPath(GAME_APP_ID) + L"\\assets\\icons\\icon.ico";
-    HANDLE hIcon = LoadImageW(NULL, iconPath.c_str(), IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
-    if (hIcon)
-    {
-        wc.hIcon = (HICON)hIcon;
-        wc.hIconSm = (HICON)hIcon;
-    }
-
-    RegisterClassExW(&wc);
-
-    DWORD style = WS_OVERLAPPEDWINDOW;
-    if (!globalConfig.resizable)
-        style &= ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
-    if (!globalConfig.frame)
-        style = WS_POPUP;
-    DWORD exStyle = globalConfig.alwaysOnTop ? WS_EX_TOPMOST : 0;
-
-    RECT wr = {0, 0, globalConfig.width, globalConfig.height};
-    AdjustWindowRectEx(&wr, style, FALSE, exStyle);
-
-    HWND hWnd = CreateWindowExW(exStyle, L"GenesisClass", globalConfig.title.c_str(), style, CW_USEDEFAULT, CW_USEDEFAULT, wr.right - wr.left, wr.bottom - wr.top, NULL, NULL, hInst, NULL);
-    if (!hWnd)
-        return 1;
-
-    if (wc.hIcon)
-    {
-        SendMessage(hWnd, WM_SETICON, ICON_BIG, (LPARAM)wc.hIcon);
-        SendMessage(hWnd, WM_SETICON, ICON_SMALL, (LPARAM)wc.hIcon);
-    }
-
-    ShowWindow(hWnd, SW_SHOW);
-    UpdateWindow(hWnd);
-
-    WebViewManager::Initialize(hWnd, GAME_APP_ID, globalConfig);
-
-    MSG msg;
-    while (true)
-    {
-        if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
-        {
-            if (msg.message == WM_QUIT)
-                break;
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
-        }
-        else
-        {
-            DiscordManager::Get().Update();
-            Sleep(5);
-        }
-    }
-
-    DiscordManager::Get().Shutdown();
-    return (int)msg.wParam;
 }

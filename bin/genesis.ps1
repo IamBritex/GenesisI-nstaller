@@ -1,30 +1,12 @@
-$inputCmd = $args[0]
+$projectDir = Get-Location
+$builderPath = "C:\Genesis\build\builder.bat"
 
-$version = "2.3 (Stable)"
-$genesisRoot = Split-Path -Parent $PSScriptRoot
-$builderPath = Join-Path $genesisRoot "builder.bat"
-
-if ([string]::IsNullOrWhiteSpace($inputCmd)) {
-    $inputCmd = "help"
-}
-
-if ($inputCmd -eq "-v" -or $inputCmd -eq "--version") {
-    Write-Host "Genesis Engine CLI v$version" -ForegroundColor Cyan
-}
-elseif ($inputCmd -eq "help" -or $inputCmd -eq "-h") {
-    Write-Host "Genesis Engine CLI v$version" -ForegroundColor Green
-    Write-Host "----------------------------"
-    Write-Host "  genesis compile       -> Compila el proyecto actual"
-    Write-Host "  genesis -v            -> Muestra la version"
-}
-elseif ($inputCmd -eq "compile") {
-    $currentDir = Get-Location
-    if (-not (Test-Path "$currentDir\windowConfig.json")) {
-        Write-Host " [X] Error: No hay 'windowConfig.json' aqui." -ForegroundColor Red
-        return
+if ($args[0] -eq "compile") {
+    if (Test-Path $builderPath) {
+        & cmd.exe /c "`"$builderPath`" `"$projectDir`""
+    } else {
+        Write-Host "[ERROR] No se encuentra C:\Genesis\build\builder.bat" -ForegroundColor Red
     }
-    & cmd.exe /c "$builderPath" "$currentDir"
-}
-else {
-    Write-Host "Comando '$inputCmd' no reconocido." -ForegroundColor Yellow
+} else {
+    Write-Host "Comando desconocido."
 }
